@@ -308,9 +308,13 @@ fn do_diff(
 
     let (mut patch_r, mut patch_w) = pipe::pipe();
     let diff_params = DiffParams::new(*sort_partitions, *scan_chunk_size).unwrap();
+    let older = older.clone();
+    let newer = newer.clone();
     std::thread::spawn(move || {
-        bidiff::simple_diff_with_params(
+        bidiff::diff_squashfs(
+            &older,
             &older_contents[..],
+            &newer,
             &newer_contents[..],
             &mut patch_w,
             &diff_params,

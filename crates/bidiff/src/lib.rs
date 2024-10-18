@@ -1,4 +1,8 @@
 use log::*;
+use std::ffi::CString;
+use std::ffi::c_int;
+use std::collections::HashMap;
+use std::io::Seek;
 use rayon::prelude::*;
 use sacabase::StringIndex;
 use sacapart::PartitionedSuffixArray;
@@ -8,6 +12,10 @@ use std::{
     io::{self, Write},
     time::Instant,
 };
+use std::ffi::c_char;
+use std::ffi::c_void;
+use std::path::Path;
+use std::io::Read;
 
 #[cfg(feature = "enc")]
 pub mod enc;
@@ -461,6 +469,133 @@ pub fn simple_diff_with_params(
 
     Ok(())
 }
+
+extern "C" {
+    fn shim_open(path: *const c_char) -> *mut c_void;
+    fn shim_close(data: *mut c_void);
+    fn shim_lookup(data: *mut c_void, index: u32, hash: *mut char, offset: *mut u64,  size: *mut u64) -> c_int;
+    fn shim_get_data_offsets(data: *mut c_void, start: *mut u64, end: *mut u64) -> c_int;
+}
+
+struct Fragments {
+    data: *mut c_void,
+    pos: usize,
+}
+
+impl Fragments {
+    fn new(path: &Path) -> Result<Self, std::io::Error> {
+        let c_path = CString::new(path.to_str().unwrap()).unwrap();
+        let data = unsafe {shim_open(c_path.as_ptr() as *const c_char)};
+        if data.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self { data, pos: 0})
+    }
+}
+
+impl Drop for Fragments {
+    fn drop(&mut self) {
+        unsafe {shim_close(self.data)};
+    }
+}
+
+fn vec_to_string(v: &[u8]) -> String {
+    v.iter().take_while(|&&c| c != 0).map(|&c| c as char).collect()
+}
+
+impl Iterator for Fragments {
+    type Item = (String, u64, u64); //Hash & offset & size
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut hash = vec![0;100];
+        let mut offset = 0u64;
+        let mut size = 0u64;
+        let res = unsafe {shim_lookup(self.data, self.pos as u32, hash.as_mut_ptr() as *mut char, &mut offset as *mut u64, &mut size as *mut u64)};
+        if res == 0 {
+            self.pos += 1;
+            Some((vec_to_string(&hash), offset, size))
+        } else {
+            None
+        }
+    }
+}
+
+fn diff_squashfs_data<R, F>(
+    old_path: &Path,
+    _old: R,
+    new_path: &Path,
+    _new: R,
+    mut on_match: F) -> Result<(), io::Error>
+where
+    R: Read,
+    F: FnMut(Match) -> Result<(), io::Error>
+{
+    let old_map = Fragments::new(old_path)?
+        .into_iter()
+        .map(|(hash, pos, length)| (hash, (pos, length)))
+        .collect::<HashMap<String, (u64, u64)>>();
+
+    //TODO check that there is no gaps or overlaps.
+    for (new_hash, new_pos, length) in Fragments::new(new_path).unwrap() {
+        let m = match old_map.get(&new_hash) {
+            Some((old_pos, old_length)) => {
+                assert_eq!(length, *old_length);
+                Match {
+                    add_old_start: *old_pos as usize,
+                    add_new_start: new_pos as usize,
+                    add_length: length as usize,
+                    copy_end: (new_pos + length) as usize,
+                }
+            },
+            None => Match {
+                    add_old_start: 0,
+                    add_new_start: new_pos as usize,
+                    add_length: 0,
+                    copy_end: (new_pos + length) as usize,
+            }
+        };
+        on_match(m)?
+    }
+    Ok(())
+}
+
+
+#[cfg(feature = "enc")]
+pub fn diff_squashfs<R>(
+    old_path: &Path,
+    old: R,
+    new_path: &Path,
+    new: R,
+    out: &mut dyn Write,
+    diff_params: &DiffParams) -> Result<(), io::Error>
+where
+    R: Read
+{
+    let mut w = enc::Writer::new(out)?;
+
+    //let mut translator = Translator::new(old, new, |control| w.write(control));
+
+//    old_header = sqfs_get_header(old)?;
+//    new_header = sqfs_get_header(new)?;
+//    diff(old_header, old_header, diff_params, |m| translator.translate(m))?;
+    // translator.translate(Match {
+    //     add_old_start: 0,
+    //     add_new_start: 0,
+    //     add_length: 100,
+    //     copy_end: 100,
+    // })?;
+
+//    diff_squashfs_data(old_path, old, new_path, new, |m| translator.translate(m))?;
+    diff_squashfs_data(old_path, old, new_path, new, |m| {println!("{:?}", m); Ok(())})?;
+
+    // old_footer = sqfs_get_footer(old)?;
+    // new_footer = sqfs_get_footer(new)?;
+    // diff(old_footer, old_footer, diff_params, |m| translator.translate(m))?;
+
+    //translator.close()?;
+
+    Ok(())
+}
+
 
 pub fn assert_cycle(older: &[u8], newer: &[u8]) {
     let mut older_pos = 0_usize;

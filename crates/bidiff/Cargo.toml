@@ -27,3 +27,6 @@ rayon = "1.6.1"
 [dev-dependencies]
 proptest = "1.0.0"
 
+[build-dependencies]
+pkg-config = "0.3.31"
+cc = "1.1.30"
