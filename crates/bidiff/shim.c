@@ -444,7 +444,7 @@ int shim_get_blocks(const char *path, struct block_with_hash **blocks, size_t *b
     GChecksum *checksum = g_checksum_new(G_CHECKSUM_SHA256);
     GArray *blocks_with_hash = g_array_new(TRUE, TRUE, sizeof(struct block_with_hash));
 
-    for (unsigned long i = 0; i < blocks_and_fragments->len - 1; i++) {
+    for (unsigned long i = 0; i < blocks_and_fragments->len; i++) {
         struct block *b = &g_array_index(blocks_and_fragments, struct block, i);
         g_checksum_update(checksum, (guchar *)file_map + b->offset, b->size);
         //printf("block %u: start %u size %u sha256: %s\n", i, b->offset, b->size, g_checksum_get_string(checksum));
