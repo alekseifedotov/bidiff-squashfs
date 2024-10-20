@@ -76,6 +76,9 @@ where
 
     fn send_control(&mut self, m: Option<&Match>) -> Result<(), E> {
         if let Some(pm) = self.prev_match.take() {
+            if let Some(m) = m {
+                assert_eq!(m.add_new_start, pm.copy_start());
+            }
             (self.on_control)(&Control {
                 add: &self.buf[..pm.add_length],
                 copy: &self.nbuf[pm.copy_start()..pm.copy_end],

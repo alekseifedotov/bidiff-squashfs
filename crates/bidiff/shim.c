@@ -382,7 +382,7 @@ static gint cmp_blocks(gconstpointer a, gconstpointer b) {
     return block_a->offset - block_b->offset;
 }
 
-int shim_get_blocks(const char *path, struct block_with_hash **blocks, size_t blocks_len) {
+int shim_get_blocks(const char *path, struct block_with_hash **blocks, size_t *blocks_len) {
     sqfs_state_t state = {0};
 
     if (open_sfqs(&state, path)) {
@@ -457,8 +457,9 @@ int shim_get_blocks(const char *path, struct block_with_hash **blocks, size_t bl
         if (sz != sizeof(bh.hash)) {
             abort();
         }
+        g_array_append_vals(blocks_with_hash, &bh, 1);
         g_checksum_reset(checksum);
     }
-    *blocks = g_array_steal(blocks_with_hash, &blocks_len);
+    *blocks = g_array_steal(blocks_with_hash, blocks_len);
     return 0;
 }
