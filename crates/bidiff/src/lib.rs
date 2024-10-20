@@ -470,49 +470,45 @@ pub fn simple_diff_with_params(
     Ok(())
 }
 
+type Hash = [u8; 32];
+
+#[repr(C)]
+struct Block {
+    offset: u64,
+    size: u32,
+    hash: Hash, //sha256
+}
+
 extern "C" {
-    fn shim_open(path: *const c_char) -> *mut c_void;
-    fn shim_close(data: *mut c_void);
-    fn shim_lookup(data: *mut c_void, index: u32, hash: *mut char, offset: *mut u64,  size: *mut u64) -> c_int;
-    fn shim_get_data_offsets(data: *mut c_void, start: *mut u64, end: *mut u64) -> c_int;
+    fn shim_get_blocks(path: *const c_char, blocks: *mut * mut Block, blocks_len: *mut usize) -> c_int;
 }
 
 struct Fragments {
-    data: *mut c_void,
+    data: Vec<Block>,
     pos: usize,
 }
 
 impl Fragments {
     fn new(path: &Path) -> Result<Self, std::io::Error> {
         let c_path = CString::new(path.to_str().unwrap()).unwrap();
-        let data = unsafe {shim_open(c_path.as_ptr() as *const c_char)};
-        if data.is_null() {
+        let mut blocks = std::ptr::null_mut();
+        let mut blocks_len = 0usize;
+        let ret = unsafe {shim_get_blocks(c_path.as_ptr() as *const c_char, &mut blocks as *mut *mut Block, &mut blocks_len as *mut usize)};
+        if ret != 0 {
             return Err(std::io::Error::last_os_error());
         }
-        Ok(Self { data, pos: 0})
+        let data = unsafe {Vec::from_raw_parts(blocks, blocks_len as usize, blocks_len as usize)};
+        Ok(Self {data , pos: 0})
     }
-}
-
-impl Drop for Fragments {
-    fn drop(&mut self) {
-        unsafe {shim_close(self.data)};
-    }
-}
-
-fn vec_to_string(v: &[u8]) -> String {
-    v.iter().take_while(|&&c| c != 0).map(|&c| c as char).collect()
 }
 
 impl Iterator for Fragments {
-    type Item = (String, u64, u64); //Hash & offset & size
+    type Item = (Hash, u64, u32); //Hash & offset & size
     fn next(&mut self) -> Option<Self::Item> {
-        let mut hash = vec![0;100];
-        let mut offset = 0u64;
-        let mut size = 0u64;
-        let res = unsafe {shim_lookup(self.data, self.pos as u32, hash.as_mut_ptr() as *mut char, &mut offset as *mut u64, &mut size as *mut u64)};
-        if res == 0 {
+        if self.pos < self.data.len() {
+            let block = &self.data[self.pos];
             self.pos += 1;
-            Some((vec_to_string(&hash), offset, size))
+            Some((block.hash, block.offset, block.size))
         } else {
             None
         }
@@ -532,9 +528,8 @@ where
     let old_map = Fragments::new(old_path)?
         .into_iter()
         .map(|(hash, pos, length)| (hash, (pos, length)))
-        .collect::<HashMap<String, (u64, u64)>>();
+        .collect::<HashMap<Hash, (u64, u32)>>();
 
-    //TODO check that there is no gaps or overlaps.
     for (new_hash, new_pos, length) in Fragments::new(new_path).unwrap() {
         let m = match old_map.get(&new_hash) {
             Some((old_pos, old_length)) => {
@@ -543,14 +538,14 @@ where
                     add_old_start: *old_pos as usize,
                     add_new_start: new_pos as usize,
                     add_length: length as usize,
-                    copy_end: (new_pos + length) as usize,
+                    copy_end: (new_pos + length as u64) as usize,
                 }
             },
             None => Match {
                     add_old_start: 0,
                     add_new_start: new_pos as usize,
                     add_length: 0,
-                    copy_end: (new_pos + length) as usize,
+                    copy_end: (new_pos + length as u64) as usize,
             }
         };
         on_match(m)?

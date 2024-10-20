@@ -1,6 +1,7 @@
 #include <sqfs/predef.h>
+#include <inttypes.h>
+#include <sqfs/inode.h>
 #include <glib.h>
-#include <unistd.h>
 #include <glib/gchecksum.h>
 #include <fcntl.h>
 #include <sqfs/frag_table.h>
@@ -31,6 +32,7 @@ struct sqfs_data_reader_t {
 
 	sqfs_u8 *frag_block;
 	size_t frag_blk_size;
+	sqfs_u32 current_frag_index;
 	sqfs_u32 block_size;
 
 	sqfs_u8 scratch[];
@@ -48,8 +50,7 @@ typedef struct {
 	sqfs_data_reader_t *data;
 
 	sqfs_compressor_config_t options;
-    GChecksum *checksum;
-    void *file_map;
+	bool have_options;
 } sqfs_state_t;
 
 void sqfs_perror(const char *file, const char *action, int error_code)
@@ -161,9 +162,13 @@ static int open_sfqs(sqfs_state_t *state, const char *path)
 		if (ret == 0) {
 			state->cmp->get_configuration(state->cmp,
 						      &state->options);
+			state->have_options = true;
 		} else {
 			sqfs_perror(path, "reading compressor options", ret);
+			state->have_options = false;
 		}
+	} else {
+		state->have_options = false;
 	}
 
 	state->idtbl = sqfs_id_table_create(0);
@@ -251,64 +256,209 @@ fail_file:
 
 /* } */
 
+struct block {
+    sqfs_u32 size;
+    sqfs_u64 offset;
+};
 
-sqfs_state_t *shim_open(const char *path)
-{
-    sqfs_state_t *state = calloc(1, sizeof(*state));
+struct block_with_hash {
+    sqfs_u64 offset;
+    sqfs_u32 size;
+    char hash[32];
+};
 
-    if (open_sfqs(state, path)) {
+void get_all_inodes(sqfs_state_t *state, sqfs_tree_node_t *it, GPtrArray *ret) {
+    sqfs_tree_node_t *child = it->children;
+    while (child) {
+        if (child->inode->base.type == SQFS_INODE_FILE || child->inode->base.type == SQFS_INODE_EXT_FILE)
+            g_ptr_array_add(ret, child->inode);
+        get_all_inodes(state, child, ret);
+        child = child->next;
+    }
+}
+
+gint compare_inode_id(gconstpointer _a, gconstpointer _b) {
+    sqfs_inode_generic_t const *a = _a;
+    sqfs_inode_generic_t const *b = _b;
+
+    return a->base.inode_number - b->base.inode_number;
+}
+
+/// remove duplicating elements from the pointer array
+/// The array is assumed to be sorted
+/// Takes ownership of the array and returns a new one without duplicates
+GPtrArray * remove_duplicates_ptr_array(GPtrArray * const data, GCompareFunc cmp) {
+    GPtrArray * ret = g_ptr_array_new();
+    for (unsigned i = 0; i < data->len - 1; i++) {
+        gint tmp = cmp(g_ptr_array_index(data, i), g_ptr_array_index(data, i+1));
+        if (tmp > 0) {
+            fprintf(stderr, "ptr array is not sorted at pos 0x%x", i);
+            abort();
+        }
+        if (tmp < 0) {
+            g_ptr_array_add(ret, g_ptr_array_index(data, i));
+        }
+    }
+    g_ptr_array_add(ret, g_ptr_array_index(data, data->len-1));
+    g_ptr_array_free(data, TRUE);
+    return ret;
+}
+
+/// remove duplicating elements from the pointer array
+/// The array is assumed to be sorted
+/// Takes ownership of the array and returns a new one without duplicates
+GArray * remove_duplicates_blocks(GArray * const data) {
+    GArray * ret = g_array_new(TRUE, TRUE, sizeof(struct block));
+    for (unsigned i = 0; i < data->len - 1; i++) {
+        struct block const *a = &g_array_index(data, struct block, i);
+        struct block const *b = &g_array_index(data, struct block, i+1);
+        if (a->offset > b->offset) {
+            printf("array is not sorted at pos 0x%x", i);
+            abort();
+        }
+        //skip identical blocks
+        if (a->offset == b->offset && a->size == b->size) {
+            continue;
+        }
+        g_array_append_vals(ret, &g_array_index(data, struct block, i), 1);
+    }
+    g_array_append_vals(ret, &g_array_index(data, struct block, data->len-1), 1);
+    g_array_free(data, TRUE);
+    return ret;
+}
+
+void get_file_inode_blocks (gpointer data, gpointer user_data) {
+    sqfs_inode_generic_t *inode = data;
+    GArray *blocks = user_data;
+    sqfs_u64 location;
+    sqfs_u32 frag_idx, frag_offset;
+    sqfs_u64 size;
+    switch (inode->base.type) {
+        case SQFS_INODE_FILE:
+        case SQFS_INODE_EXT_FILE:
+            sqfs_inode_get_file_block_start(inode, &location);
+            sqfs_inode_get_file_size(inode, &size);
+            sqfs_inode_get_frag_location(inode, &frag_idx, &frag_offset);
+
+            /* printf("Fragment index: 0x%X\n", frag_idx); */
+            /* printf("Fragment offset: 0x%X\n", frag_offset); */
+            /* printf("File size: %lu\n", (unsigned long)size); */
+
+            /* if (inode->base.type == SQFS_INODE_EXT_FILE) { */
+            /*     printf("Sparse: %" PRIu64 "\n", */
+            /*            inode->data.file_ext.sparse); */
+            /* } */
+
+            /* printf("Blocks start: %lu\n", (unsigned long)location); */
+            /* printf("Block count: %lu\n", */
+            /*        (unsigned long)sqfs_inode_get_file_block_count(inode)); */
+
+            for (unsigned long i = 0; i < sqfs_inode_get_file_block_count(inode); ++i) {
+                /* printf("\tInode %lu Block #%lx start %lx size: %x (%s)\n",  inode->base.inode_number, (unsigned long)i, (unsigned long)location, */
+                /*        SQFS_ON_DISK_BLOCK_SIZE(inode->extra[i]), */
+                /*        SQFS_IS_BLOCK_COMPRESSED(inode->extra[i]) ? */
+                /*        "compressed" : "uncompressed"); */
+                if SQFS_IS_SPARSE_BLOCK(inode->extra[i]) {
+                    continue;
+                }
+                struct block b = {
+                    .size = SQFS_ON_DISK_BLOCK_SIZE(inode->extra[i]),
+                    .offset = location,
+                };
+                g_array_append_vals(blocks, &b, 1);
+                location += SQFS_ON_DISK_BLOCK_SIZE(inode->extra[i]);
+            }
+            break;
+        default:
+            printf("inode %u is not a file %u\n", inode->base.inode_number, inode->base.type);
+            abort();
+    }
+}
+
+static gint cmp_blocks(gconstpointer a, gconstpointer b) {
+    struct block *block_a = (struct block *)a;
+    struct block *block_b = (struct block *)b;
+
+    return block_a->offset - block_b->offset;
+}
+
+int shim_get_blocks(const char *path, struct block_with_hash **blocks, size_t blocks_len) {
+    sqfs_state_t state = {0};
+
+    if (open_sfqs(&state, path)) {
         fprintf(stderr, "open_sfqs");
-        return NULL;
+        return 2;
     };
-    state->checksum = g_checksum_new(G_CHECKSUM_SHA256);
+
+    GArray *blocks_and_fragments = g_array_new(TRUE, TRUE, sizeof(struct block));
+    GPtrArray *inodes = g_ptr_array_new();
+    get_all_inodes(&state, state.root, inodes);
+    g_ptr_array_sort_values(inodes, compare_inode_id);
+    inodes = remove_duplicates_ptr_array(inodes, compare_inode_id);
+
+    // get all blocks
+    g_ptr_array_foreach(inodes, get_file_inode_blocks, blocks_and_fragments);
+
+    //get all fragments
+    for (unsigned i = 0; i < sqfs_frag_table_get_size(state.data->frag_tbl); i++) {
+        sqfs_fragment_t frag;
+        sqfs_frag_table_lookup(state.data->frag_tbl, i, &frag);
+        sqfs_u32 size = frag.size;
+        if (SQFS_IS_SPARSE_BLOCK(size)) {
+            printf("fragment %u: sparse\n", i);
+            abort();
+        }
+
+        sqfs_u32 on_disk_size = SQFS_ON_DISK_BLOCK_SIZE(size);
+
+        struct block b = {
+            .size = on_disk_size,
+            .offset = frag.start_offset,
+        };
+        g_array_append_vals(blocks_and_fragments, &b, 1);
+    }
+
+
+    // make sure there is no gaps or overlaps
+    g_array_sort(blocks_and_fragments, cmp_blocks);
+    blocks_and_fragments = remove_duplicates_blocks(blocks_and_fragments);
 
     //TODO I hate opening the same file twice, but I don'd want to import the sqfs_file_stdio_t
     int fd = open(path, O_RDONLY);
     struct stat sb;
     fstat(fd, &sb);
-    state->file_map = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (state->file_map == MAP_FAILED) {
-        perror("mmap");
-        return NULL;
-    }
-    close(fd);
-    return state;
-}
+    const char *file_map = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
 
-int shim_lookup(sqfs_state_t *state, uint32_t index, unsigned char hash[100], uint64_t *offset, uint64_t *size_ret)
-{
-
-    sqfs_fragment_t frag;
-    if (sqfs_frag_table_lookup(state->data->frag_tbl, index, &frag) ) {
-        return -1;
+    for (unsigned long i = 0; i < blocks_and_fragments->len - 1; i++) {
+        struct block *c = &g_array_index(blocks_and_fragments, struct block, i);
+        struct block *n = &g_array_index(blocks_and_fragments, struct block, i+1);
+        uint64_t end = c->offset + c->size;
+        if (end < n->offset) {
+            printf("gap between blocks %lx %x and %lx %x\n", c->offset, c->size, n->offset, n->size);
+        } else if (end > n->offset) {
+            printf("overlap between blocks %lx %x and %lx %x\n", c->offset, c->size, n->offset, n->size);
+        }
     }
 
-    sqfs_u32 size = frag.size;
-    if (SQFS_IS_SPARSE_BLOCK(size)) {
-        printf("fragment %u: sparse\n", index);
-        return -1;
+    // calculate hash of each chunk
+    GChecksum *checksum = g_checksum_new(G_CHECKSUM_SHA256);
+    GArray *blocks_with_hash = g_array_new(TRUE, TRUE, sizeof(struct block_with_hash));
+
+    for (unsigned long i = 0; i < blocks_and_fragments->len - 1; i++) {
+        struct block *b = &g_array_index(blocks_and_fragments, struct block, i);
+        g_checksum_update(checksum, (guchar *)file_map + b->offset, b->size);
+        //printf("block %u: start %u size %u sha256: %s\n", i, b->offset, b->size, g_checksum_get_string(checksum));
+        struct block_with_hash bh = {
+            .offset = b->offset,
+            .size = b->size,
+        };
+        gsize sz = sizeof(bh.hash);
+        g_checksum_get_digest(checksum, (unsigned char *)bh.hash, &sz);
+        if (sz != sizeof(bh.hash)) {
+            abort();
+        }
+        g_checksum_reset(checksum);
     }
-
-    sqfs_u32 on_disk_size = SQFS_ON_DISK_BLOCK_SIZE(size);
-    g_checksum_update(state->checksum, (guchar *)state->file_map + frag.start_offset, on_disk_size);
-
-    strlcpy(hash, g_checksum_get_string(state->checksum), 100);
-    *offset = frag.start_offset;
-    *size_ret = on_disk_size;
-    g_checksum_reset(state->checksum);
-    return 0;
-}
-
-
-int shim_close(sqfs_state_t *state) {
-    //TODO
-    //     g_checksum_free(checksum);
-
-}
-
-int shim_get_data_offsets(sqfs_state_t *state, uint64_t *start, uint64_t *end)
-{
-    *start = sizeof(sqfs_super_t)+sizeof(sqfs_u32);
-    *end = state->super.inode_table_start;
+    *blocks = g_array_steal(blocks_with_hash, &blocks_len);
     return 0;
 }
