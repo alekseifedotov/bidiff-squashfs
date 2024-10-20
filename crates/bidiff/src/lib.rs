@@ -77,7 +77,7 @@ where
     fn send_control(&mut self, m: Option<&Match>) -> Result<(), E> {
         if let Some(pm) = self.prev_match.take() {
             if let Some(m) = m {
-                assert_eq!(m.add_new_start, pm.copy_start());
+                assert_eq!(m.add_new_start, pm.copy_end);
             }
             (self.on_control)(&Control {
                 add: &self.buf[..pm.add_length],
@@ -484,6 +484,16 @@ struct Block {
 
 extern "C" {
     fn shim_get_blocks(path: *const c_char, blocks: *mut * mut Block, blocks_len: *mut usize) -> c_int;
+    fn shim_get_inode_table_idx(path: *const c_char) -> u64;
+}
+
+fn get_inode_table_idx(path: &Path) -> Result<usize, std::io::Error> {
+    let c_path = CString::new(path.to_str().unwrap()).unwrap();
+    let ret = unsafe {shim_get_inode_table_idx(c_path.as_ptr() as *const c_char)};
+    if ret == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(ret as usize)
 }
 
 struct Fragments {
@@ -518,14 +528,11 @@ impl Iterator for Fragments {
     }
 }
 
-fn diff_squashfs_data<R, F>(
+fn diff_squashfs_data<F>(
     old_path: &Path,
-    _old: R,
     new_path: &Path,
-    _new: R,
     mut on_match: F) -> Result<(), io::Error>
 where
-    R: Read,
     F: FnMut(Match) -> Result<(), io::Error>
 {
     let old_map = Fragments::new(old_path)?
@@ -558,38 +565,39 @@ where
 
 
 #[cfg(feature = "enc")]
-pub fn diff_squashfs<R>(
+pub fn diff_squashfs(
     old_path: &Path,
-    old: R,
+    old: &[u8],
     new_path: &Path,
-    new: R,
+    new: &[u8],
     out: &mut dyn Write,
     diff_params: &DiffParams) -> Result<(), io::Error>
-where
-    R: Read
 {
     let mut w = enc::Writer::new(out)?;
 
-    //let mut translator = Translator::new(old, new, |control| w.write(control));
+    let mut translator = Translator::new(old, new, |control| w.write(control));
+    // squashfs header with zstd takes 96 bytes
+    diff(&old[0..96], &new[0..96], diff_params, |m| translator.translate(m))?;
 
-//    old_header = sqfs_get_header(old)?;
-//    new_header = sqfs_get_header(new)?;
-//    diff(old_header, old_header, diff_params, |m| translator.translate(m))?;
-    // translator.translate(Match {
-    //     add_old_start: 0,
-    //     add_new_start: 0,
-    //     add_length: 100,
-    //     copy_end: 100,
-    // })?;
+    diff_squashfs_data(old_path, new_path, |m| {println!("{:?}", m); translator.translate(m)})?;
 
-//    diff_squashfs_data(old_path, old, new_path, new, |m| translator.translate(m))?;
-    diff_squashfs_data(old_path, old, new_path, new, |m| {println!("{:?}", m); Ok(())})?;
+    let footer_offset_old = get_inode_table_idx(old_path).unwrap();
+    let footer_offset_new = get_inode_table_idx(new_path).unwrap();
 
-    // old_footer = sqfs_get_footer(old)?;
-    // new_footer = sqfs_get_footer(new)?;
-    // diff(old_footer, old_footer, diff_params, |m| translator.translate(m))?;
+    println!("footer_offset_old {}", footer_offset_old);
+    println!("footer_offset_new {}", footer_offset_new);
 
-    //translator.close()?;
+    diff(&old[footer_offset_old..], &new[footer_offset_new..], diff_params, |m| {
+        let m = Match{
+            add_old_start: m.add_old_start + footer_offset_old,
+            add_new_start: m.add_new_start + footer_offset_new,
+            copy_end: m.copy_end + footer_offset_new,
+            ..m
+        };
+        println!("{:?}", m);
+        translator.translate(m)})?;
+
+    translator.close()?;
 
     Ok(())
 }

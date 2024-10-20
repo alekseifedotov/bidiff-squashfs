@@ -463,3 +463,16 @@ int shim_get_blocks(const char *path, struct block_with_hash **blocks, size_t *b
     *blocks = g_array_steal(blocks_with_hash, blocks_len);
     return 0;
 }
+
+
+uint64_t shim_get_inode_table_idx(const char *path)
+{
+    sqfs_state_t state = {0};
+
+    if (open_sfqs(&state, path)) {
+        fprintf(stderr, "open_sfqs");
+        return 0;
+    };
+
+    return state.super.inode_table_start;
+}
