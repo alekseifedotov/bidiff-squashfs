@@ -379,7 +379,12 @@ static gint cmp_blocks(gconstpointer a, gconstpointer b) {
     struct block *block_a = (struct block *)a;
     struct block *block_b = (struct block *)b;
 
-    return block_a->offset - block_b->offset;
+    if (block_a->offset < block_b->offset)
+        return -1;
+    else if (block_a->offset > block_b->offset)
+        return 1;
+    else
+        return 0;
 }
 
 int shim_get_blocks(const char *path, struct block_with_hash **blocks, size_t *blocks_len) {
