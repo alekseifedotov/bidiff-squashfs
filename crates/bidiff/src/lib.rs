@@ -579,7 +579,8 @@ pub fn diff_squashfs(
     // squashfs header with zstd takes 96 bytes
     diff(&old[0..96], &new[0..96], diff_params, |m| translator.translate(m))?;
 
-    diff_squashfs_data(old_path, new_path, |m| {println!("{:?}", m); translator.translate(m)})?;
+    diff_squashfs_data(old_path, new_path, |m| {// println!("{:?}", m);
+                                                translator.translate(m)})?;
 
     let footer_offset_old = get_inode_table_idx(old_path).unwrap();
     let footer_offset_new = get_inode_table_idx(new_path).unwrap();
@@ -594,7 +595,7 @@ pub fn diff_squashfs(
             copy_end: m.copy_end + footer_offset_new,
             ..m
         };
-        println!("{:?}", m);
+//        println!("{:?}", m);
         translator.translate(m)})?;
 
     translator.close()?;
