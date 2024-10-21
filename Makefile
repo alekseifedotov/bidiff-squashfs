@@ -1,7 +1,7 @@
 A=$(HOME)/fw/main/ready-to-sign/bootloader/
 B=$(HOME)/fw/main/ready-to-sign/bootloader/
 
-LAYERS=ai_layer.img  base_layer.img  cache_layer.img   lft_layer.img  packages_layer.img  security_layer.img  software_layer.img  system_layer.img
+LAYERS=ai_layer.img  base_layer.img cuda_layer.img cache_layer.img   lft_layer.img  packages_layer.img  security_layer.img  software_layer.img  system_layer.img
 
 # TODO fir cuda layer
 #
