@@ -292,7 +292,7 @@ GPtrArray * remove_duplicates_ptr_array(GPtrArray * const data, GCompareFunc cmp
     for (unsigned i = 0; i < data->len - 1; i++) {
         gint tmp = cmp(g_ptr_array_index(data, i), g_ptr_array_index(data, i+1));
         if (tmp > 0) {
-            fprintf(stderr, "ptr array is not sorted at pos 0x%x", i);
+            fprintf(stderr, "ptr array is not sorted at pos 0x%x\n", i);
             abort();
         }
         if (tmp < 0) {
@@ -313,7 +313,7 @@ GArray * remove_duplicates_blocks(GArray * const data) {
         struct block const *a = &g_array_index(data, struct block, i);
         struct block const *b = &g_array_index(data, struct block, i+1);
         if (a->offset > b->offset) {
-            printf("array is not sorted at pos 0x%x", i);
+            fprintf(stderr, "array is not sorted at pos 0x%x\n", i);
             abort();
         }
         //skip identical blocks
@@ -370,7 +370,7 @@ void get_file_inode_blocks (gpointer data, gpointer user_data) {
             }
             break;
         default:
-            printf("inode %u is not a file %u\n", inode->base.inode_number, inode->base.type);
+            fprintf(stderr, "inode %u is not a file %u\n", inode->base.inode_number, inode->base.type);
             abort();
     }
 }
@@ -410,7 +410,7 @@ int shim_get_blocks(const char *path, struct block_with_hash **blocks, size_t *b
         sqfs_frag_table_lookup(state.data->frag_tbl, i, &frag);
         sqfs_u32 size = frag.size;
         if (SQFS_IS_SPARSE_BLOCK(size)) {
-            printf("fragment %u: sparse\n", i);
+            fprintf(stderr, "fragment %u: sparse\n", i);
             abort();
         }
 
