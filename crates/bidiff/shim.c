@@ -257,8 +257,9 @@ fail_file:
 /* } */
 
 struct block {
-    sqfs_u32 size;
     sqfs_u64 offset;
+    sqfs_u32 size;
+    sqfs_u32 pad;
 };
 
 struct block_with_hash {
