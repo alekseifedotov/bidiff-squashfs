@@ -1,21 +1,18 @@
 use log::*;
-use std::ffi::CString;
-use std::ffi::c_int;
-use std::collections::HashMap;
-use std::io::Seek;
 use rayon::prelude::*;
 use sacabase::StringIndex;
 use sacapart::PartitionedSuffixArray;
+use std::collections::HashMap;
+use std::ffi::c_char;
+use std::ffi::c_int;
+use std::ffi::CString;
+use std::path::Path;
 use std::{
     cmp::min,
     error::Error,
     io::{self, Write},
     time::Instant,
 };
-use std::ffi::c_char;
-use std::ffi::c_void;
-use std::path::Path;
-use std::io::Read;
 
 #[cfg(feature = "enc")]
 pub mod enc;
@@ -483,13 +480,17 @@ struct Block {
 }
 
 extern "C" {
-    fn shim_get_blocks(path: *const c_char, blocks: *mut * mut Block, blocks_len: *mut usize) -> c_int;
+    fn shim_get_blocks(
+        path: *const c_char,
+        blocks: *mut *mut Block,
+        blocks_len: *mut usize,
+    ) -> c_int;
     fn shim_get_inode_table_idx(path: *const c_char) -> u64;
 }
 
 fn get_inode_table_idx(path: &Path) -> Result<usize, std::io::Error> {
     let c_path = CString::new(path.to_str().unwrap()).unwrap();
-    let ret = unsafe {shim_get_inode_table_idx(c_path.as_ptr() as *const c_char)};
+    let ret = unsafe { shim_get_inode_table_idx(c_path.as_ptr() as *const c_char) };
     if ret == 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -506,12 +507,18 @@ impl Fragments {
         let c_path = CString::new(path.to_str().unwrap()).unwrap();
         let mut blocks = std::ptr::null_mut();
         let mut blocks_len = 0usize;
-        let ret = unsafe {shim_get_blocks(c_path.as_ptr() as *const c_char, &mut blocks as *mut *mut Block, &mut blocks_len as *mut usize)};
+        let ret = unsafe {
+            shim_get_blocks(
+                c_path.as_ptr() as *const c_char,
+                &mut blocks as *mut *mut Block,
+                &mut blocks_len as *mut usize,
+            )
+        };
         if ret != 0 {
             return Err(std::io::Error::last_os_error());
         }
-        let data = unsafe {Vec::from_raw_parts(blocks, blocks_len as usize, blocks_len as usize)};
-        Ok(Self {data , pos: 0})
+        let data = unsafe { Vec::from_raw_parts(blocks, blocks_len as usize, blocks_len as usize) };
+        Ok(Self { data, pos: 0 })
     }
 }
 
@@ -528,12 +535,9 @@ impl Iterator for Fragments {
     }
 }
 
-fn diff_squashfs_data<F>(
-    old_path: &Path,
-    new_path: &Path,
-    mut on_match: F) -> Result<(), io::Error>
+fn diff_squashfs_data<F>(old_path: &Path, new_path: &Path, mut on_match: F) -> Result<(), io::Error>
 where
-    F: FnMut(Match) -> Result<(), io::Error>
+    F: FnMut(Match) -> Result<(), io::Error>,
 {
     let old_map = Fragments::new(old_path)?
         .into_iter()
@@ -550,19 +554,18 @@ where
                     add_length: length as usize,
                     copy_end: (new_pos + length as u64) as usize,
                 }
-            },
-            None => Match {
-                    add_old_start: 0,
-                    add_new_start: new_pos as usize,
-                    add_length: 0,
-                    copy_end: (new_pos + length as u64) as usize,
             }
+            None => Match {
+                add_old_start: 0,
+                add_new_start: new_pos as usize,
+                add_length: 0,
+                copy_end: (new_pos + length as u64) as usize,
+            },
         };
         on_match(m)?
     }
     Ok(())
 }
-
 
 #[cfg(feature = "enc")]
 pub fn diff_squashfs(
@@ -571,16 +574,20 @@ pub fn diff_squashfs(
     new_path: &Path,
     new: &[u8],
     out: &mut dyn Write,
-    diff_params: &DiffParams) -> Result<(), io::Error>
-{
+    diff_params: &DiffParams,
+) -> Result<(), io::Error> {
     let mut w = enc::Writer::new(out)?;
 
     let mut translator = Translator::new(old, new, |control| w.write(control));
     // squashfs header with zstd takes 96 bytes
-    diff(&old[0..96], &new[0..96], diff_params, |m| translator.translate(m))?;
+    diff(&old[0..96], &new[0..96], diff_params, |m| {
+        translator.translate(m)
+    })?;
 
-    diff_squashfs_data(old_path, new_path, |m| {// println!("{:?}", m);
-                                                translator.translate(m)})?;
+    diff_squashfs_data(old_path, new_path, |m| {
+        // println!("{:?}", m);
+        translator.translate(m)
+    })?;
 
     let footer_offset_old = get_inode_table_idx(old_path).unwrap();
     let footer_offset_new = get_inode_table_idx(new_path).unwrap();
@@ -588,21 +595,26 @@ pub fn diff_squashfs(
     println!("footer_offset_old {}", footer_offset_old);
     println!("footer_offset_new {}", footer_offset_new);
 
-    diff(&old[footer_offset_old..], &new[footer_offset_new..], diff_params, |m| {
-        let m = Match{
-            add_old_start: m.add_old_start + footer_offset_old,
-            add_new_start: m.add_new_start + footer_offset_new,
-            copy_end: m.copy_end + footer_offset_new,
-            ..m
-        };
-//        println!("{:?}", m);
-        translator.translate(m)})?;
+    diff(
+        &old[footer_offset_old..],
+        &new[footer_offset_new..],
+        diff_params,
+        |m| {
+            let m = Match {
+                add_old_start: m.add_old_start + footer_offset_old,
+                add_new_start: m.add_new_start + footer_offset_new,
+                copy_end: m.copy_end + footer_offset_new,
+                ..m
+            };
+            //        println!("{:?}", m);
+            translator.translate(m)
+        },
+    )?;
 
     translator.close()?;
 
     Ok(())
 }
-
 
 pub fn assert_cycle(older: &[u8], newer: &[u8]) {
     let mut older_pos = 0_usize;
