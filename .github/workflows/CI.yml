@@ -13,6 +13,10 @@ jobs:
           profile: minimal
           toolchain: stable
           override: true
+      - name: Install native deps
+        run: |
+          sudo apt update && sudo apt install -y libglib2.0-dev libsquashfs1 squashfs-tools
+          sudo apt list --installed
       - uses: actions-rs/cargo@v1
         with:
           command: check

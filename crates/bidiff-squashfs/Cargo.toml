@@ -1,0 +1,11 @@
+[package]
+name = "bidiff-squashfs"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+bidiff.path = "../bidiff"
+
+[build-dependencies]
+pkg-config = "0.3.31"
+cc = "1.1.30"

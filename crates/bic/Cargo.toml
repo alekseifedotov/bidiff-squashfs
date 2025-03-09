@@ -10,6 +10,7 @@ repository = "https://github.com/divvun/bidiff"
 [dependencies]
 bidiff = { path = "../bidiff", features = ["enc"] }
 bipatch = { path = "../bipatch" }
+bidiff-squashfs.path = "../bidiff-squashfs"
 
 log = "0.4.17"
 env_logger = "0.10.0"
