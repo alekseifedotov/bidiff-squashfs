@@ -311,7 +311,7 @@ fn do_diff(
     let older = older.clone();
     let newer = newer.clone();
     std::thread::spawn(move || {
-        bidiff::diff_squashfs(
+        bidiff_squashfs::diff_squashfs(
             &older,
             &older_contents[..],
             &newer,

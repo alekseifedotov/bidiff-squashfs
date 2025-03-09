@@ -1,9 +1,10 @@
-
 [workspace]
+resolver = "2"
 members = [
     "crates/bidiff",
     "crates/bipatch",
-    "crates/bic"
+    "crates/bic",
+    "crates/bidiff-squashfs",
 ]
 
 [profile.release]

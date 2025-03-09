@@ -1,3 +1,0 @@
-[submodule "squashfs-ng-rs"]
-	path = squashfs-ng-rs
-	url = https://github.com/showermat/squashfs-ng-rs.git
