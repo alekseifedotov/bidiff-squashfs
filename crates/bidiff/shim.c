@@ -294,25 +294,7 @@ void get_file_inode_blocks(gpointer data, gpointer user_data) {
     sqfs_inode_get_file_size(inode, &size);
     sqfs_inode_get_frag_location(inode, &frag_idx, &frag_offset);
 
-    /* printf("Fragment index: 0x%X\n", frag_idx); */
-    /* printf("Fragment offset: 0x%X\n", frag_offset); */
-    /* printf("File size: %lu\n", (unsigned long)size); */
-
-    /* if (inode->base.type == SQFS_INODE_EXT_FILE) { */
-    /*     printf("Sparse: %" PRIu64 "\n", */
-    /*            inode->data.file_ext.sparse); */
-    /* } */
-
-    /* printf("Blocks start: %lu\n", (unsigned long)location); */
-    /* printf("Block count: %lu\n", */
-    /*        (unsigned long)sqfs_inode_get_file_block_count(inode)); */
-
     for (unsigned long i = 0; i < sqfs_inode_get_file_block_count(inode); ++i) {
-      /* printf("\tInode %lu Block #%lx start %lx size: %x (%s)\n",
-       * inode->base.inode_number, (unsigned long)i, (unsigned long)location, */
-      /*        SQFS_ON_DISK_BLOCK_SIZE(inode->extra[i]), */
-      /*        SQFS_IS_BLOCK_COMPRESSED(inode->extra[i]) ? */
-      /*        "compressed" : "uncompressed"); */
       if SQFS_IS_SPARSE_BLOCK (inode->extra[i]) {
         continue;
       }
@@ -413,8 +395,6 @@ int shim_get_blocks(const char *path, struct block_with_hash **blocks,
   for (unsigned long i = 0; i < blocks_and_fragments->len; i++) {
     struct block *b = &g_array_index(blocks_and_fragments, struct block, i);
     g_checksum_update(checksum, (guchar *)file_map + b->offset, b->size);
-    // printf("block %u: start %u size %u sha256: %s\n", i, b->offset, b->size,
-    // g_checksum_get_string(checksum));
     struct block_with_hash bh = {
         .offset = b->offset,
         .size = b->size,
