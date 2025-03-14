@@ -18,26 +18,6 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
-// TODO: copied from data_reader.c
-struct sqfs_data_reader_t {
-  sqfs_object_t obj;
-
-  sqfs_frag_table_t *frag_tbl;
-  sqfs_compressor_t *cmp;
-  sqfs_file_t *file;
-
-  sqfs_u8 *data_block;
-  size_t data_blk_size;
-  sqfs_u64 current_block;
-
-  sqfs_u8 *frag_block;
-  size_t frag_blk_size;
-  sqfs_u32 current_frag_index;
-  sqfs_u32 block_size;
-
-  sqfs_u8 scratch[];
-};
-
 typedef struct {
   sqfs_compressor_config_t cfg;
   sqfs_compressor_t *cmp;
@@ -47,6 +27,7 @@ typedef struct {
   sqfs_dir_reader_t *dr;
   sqfs_tree_node_t *root;
   sqfs_data_reader_t *data;
+  sqfs_frag_table_t *frag_tbl;
 
   sqfs_compressor_config_t options;
   bool have_options;
@@ -192,22 +173,20 @@ static int open_sfqs(sqfs_state_t *state, const char *path) {
     goto fail_dr;
   }
 
-  state->data = sqfs_data_reader_create(state->file, state->super.block_size,
-                                        state->cmp, 0);
-  if (state->data == NULL) {
-    sqfs_perror(path, "creating data reader", SQFS_ERROR_ALLOC);
+  state->frag_tbl = sqfs_frag_table_create(0);
+  if (!state->frag_tbl) {
+    sqfs_perror(path, "allocating frag table", SQFS_ERROR_ALLOC);
     goto fail_tree;
   }
-
-  ret = sqfs_data_reader_load_fragment_table(state->data, &state->super);
-  if (ret) {
-    sqfs_perror(path, "loading fragment table", ret);
-    goto fail_data;
-  }
+  ret = sqfs_frag_table_read(state->frag_tbl, state->file, &state->super, state->cmp);
+  if (ret != 0) {
+    sqfs_perror(path, "reading frag table", ret);
+    goto fail_frag;
+   }
 
   return 0;
-fail_data:
-  sqfs_destroy(state->data);
+fail_frag:
+  sqfs_destroy(state->frag_tbl);
 fail_tree:
   sqfs_dir_tree_destroy(state->root);
 fail_dr:
@@ -383,10 +362,10 @@ int shim_get_blocks(const char *path, struct block_with_hash **blocks,
   g_ptr_array_foreach(inodes, get_file_inode_blocks, blocks_and_fragments);
 
   // get all fragments
-  for (unsigned i = 0; i < sqfs_frag_table_get_size(state.data->frag_tbl);
+  for (unsigned i = 0; i < sqfs_frag_table_get_size(state.frag_tbl);
        i++) {
     sqfs_fragment_t frag;
-    sqfs_frag_table_lookup(state.data->frag_tbl, i, &frag);
+    sqfs_frag_table_lookup(state.frag_tbl, i, &frag);
     sqfs_u32 size = frag.size;
     if (SQFS_IS_SPARSE_BLOCK(size)) {
       fprintf(stderr, "fragment %u: sparse\n", i);
